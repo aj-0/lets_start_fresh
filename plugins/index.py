@@ -9,11 +9,11 @@ logger = logging.getLogger(__name__)
 
 @Client.on_message(filters.command("index") & filters.user(ADMINS))
 async def index_files(client, message: Message):
-    """Index files from INDEX_CHANNELS."""
+    """Index files from INDEX_CHANNELS using bot-compatible method."""
     if not INDEX_CHANNELS:
         return await message.reply_text(
             "❌ No INDEX_CHANNELS set!\n\n"
-            "Add `INDEX_CHANNELS` in your environment variables with your channel ID."
+            "Add INDEX_CHANNELS in your environment variables."
         )
 
     status = await message.reply_text("⏳ Starting indexing...")
@@ -24,45 +24,81 @@ async def index_files(client, message: Message):
     for channel in INDEX_CHANNELS:
         try:
             chat = await client.get_chat(channel)
-            await status.edit_text(f"📂 Indexing: **{chat.title}**\nPlease wait...")
+            await status.edit_text(
+                f"📂 Indexing: **{chat.title}**\n"
+                f"⏳ This may take a while for large channels..."
+            )
 
-            async for msg in client.get_chat_history(channel):
+            msg_id      = 1
+            batch_size  = 200
+            empty_batches = 0
+
+            while empty_batches < 3:
                 try:
-                    file = None
-                    if msg.document:
-                        file = msg.document
-                    elif msg.video:
-                        file = msg.video
-                    elif msg.audio:
-                        file = msg.audio
+                    ids = list(range(msg_id, msg_id + batch_size))
+                    messages = await client.get_messages(channel, ids)
 
-                    if not file:
-                        continue
+                    has_content = False
+                    for msg in messages:
+                        if not msg or not msg.id:
+                            continue
+                        has_content = True
+                        try:
+                            file = None
+                            if msg.document:
+                                file = msg.document
+                            elif msg.video:
+                                file = msg.video
+                            elif msg.audio:
+                                file = msg.audio
 
-                    name = getattr(file, 'file_name', '') or ''
-                    ext  = name.rsplit('.', 1)[-1].lower() if '.' in name else ''
+                            if not file:
+                                continue
 
-                    if INDEX_EXTENSIONS and ext not in INDEX_EXTENSIONS:
-                        continue
+                            name = getattr(file, 'file_name', '') or ''
+                            ext  = name.rsplit('.', 1)[-1].lower() if '.' in name else ''
 
-                    saved = save_file(
-                        file_id=file.file_id,
-                        file_name=name or f"file_{file.file_unique_id}",
-                        file_size=file.file_size or 0,
-                        file_type=ext,
-                        caption=msg.caption or ''
-                    )
-                    if saved:
-                        total_saved += 1
+                            if INDEX_EXTENSIONS and ext not in INDEX_EXTENSIONS:
+                                continue
+
+                            saved = save_file(
+                                file_id=file.file_id,
+                                file_name=name or f"file_{file.file_unique_id}",
+                                file_size=file.file_size or 0,
+                                file_type=ext,
+                                caption=msg.caption or ''
+                            )
+                            if saved:
+                                total_saved += 1
+                            else:
+                                total_skip += 1
+
+                        except Exception as e:
+                            total_err += 1
+                            logger.warning(f"File error: {e}")
+
+                    if not has_content:
+                        empty_batches += 1
                     else:
-                        total_skip += 1
+                        empty_batches = 0
+
+                    msg_id += batch_size
+
+                    if msg_id % 1000 == 1:
+                        await status.edit_text(
+                            f"📂 Indexing: **{chat.title}**\n"
+                            f"✅ Saved: `{total_saved}`\n"
+                            f"⏭ Skipped: `{total_skip}`\n"
+                            f"🔄 Scanning message #{msg_id}..."
+                        )
 
                 except Exception as e:
-                    total_err += 1
-                    logger.warning(f"File index error: {e}")
+                    logger.warning(f"Batch error at {msg_id}: {e}")
+                    msg_id += batch_size
+                    continue
 
         except Exception as e:
-            logger.error(f"Channel index error for {channel}: {e}")
+            logger.error(f"Channel error {channel}: {e}")
             await status.edit_text(f"❌ Error accessing channel `{channel}`:\n`{e}`")
             return
 
@@ -78,8 +114,7 @@ async def index_files(client, message: Message):
 
 @Client.on_message(filters.command("delete_all") & filters.user(ADMINS))
 async def delete_all(client, message: Message):
-    """Delete all indexed files."""
-    confirm = await message.reply_text(
+    await message.reply_text(
         "⚠️ Are you sure you want to delete ALL indexed files?\n\n"
         "Reply with /confirm_delete to proceed."
     )
@@ -96,3 +131,17 @@ async def confirm_delete(client, message: Message):
 async def file_count(client, message: Message):
     total = count_files()
     await message.reply_text(f"📁 Total indexed files: `{total}`")
+
+
+@Client.on_message(filters.command("index_channels") & filters.user(ADMINS))
+async def show_index_channels(client, message: Message):
+    if not INDEX_CHANNELS:
+        return await message.reply_text("❌ No INDEX_CHANNELS configured!")
+    text = "📋 **Indexed Channels:**\n\n"
+    for ch in INDEX_CHANNELS:
+        try:
+            chat = await client.get_chat(ch)
+            text += f"• {chat.title} (`{ch}`)\n"
+        except Exception:
+            text += f"• `{ch}` (can't fetch name)\n"
+    await message.reply_text(text)
