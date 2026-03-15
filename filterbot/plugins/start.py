@@ -11,14 +11,10 @@ logger = logging.getLogger(__name__)
 START_TEXT = """
 👋 Hello {mention}!
 
-I'm an **Auto Filter Bot** — add me to your group and I'll help users find movies instantly!
+I'm a **MOVIE BOT ** 
+join our channel first 
+any problem msg me : @Infinity_vibe
 
-🔍 Just type any movie name in the group and I'll show the available files.
-
-📌 **How to use:**
-• Add me to your group as admin
-• Index your movie channel with /index
-• Users type movie names to get files
 """
 
 HELP_TEXT = """
