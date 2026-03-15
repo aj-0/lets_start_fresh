@@ -1,147 +1,256 @@
+import asyncio
 import logging
+import re
 from hydrogram import Client, filters
-from hydrogram.types import Message
-from info import ADMINS, INDEX_CHANNELS, INDEX_EXTENSIONS
-from database import save_file, delete_all_files, count_files
+from hydrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
+from info import ADMINS, MAX_BTN, DELETE_TIME, SUPPORT_GROUP
+from database import search_files, get_group_settings, add_user
+from utils import get_size, get_shortlink, get_imdb_info, get_spell_suggestions, is_subscribed
 
 logger = logging.getLogger(__name__)
 
+SEARCH_CACHE = {}
 
-@Client.on_message(filters.command("index") & filters.user(ADMINS))
-async def index_files(client, message: Message):
-    """Index files from INDEX_CHANNELS using bot-compatible method."""
-    if not INDEX_CHANNELS:
-        return await message.reply_text(
-            "❌ No INDEX_CHANNELS set!\n\n"
-            "Add INDEX_CHANNELS in your environment variables."
-        )
 
-    status = await message.reply_text("⏳ Starting indexing...")
-    total_saved = 0
-    total_skip  = 0
-    total_err   = 0
+def clean_query(text):
+    text = re.sub(r'[-:"\';!@#$%^&*()]', ' ', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
 
-    for channel in INDEX_CHANNELS:
-        try:
-            chat = await client.get_chat(channel)
-            await status.edit_text(
-                f"📂 Indexing: **{chat.title}**\n"
-                f"⏳ This may take a while for large channels..."
-            )
 
-            msg_id      = 1
-            batch_size  = 200
-            empty_batches = 0
+@Client.on_message(filters.group & filters.text & filters.incoming)
+async def group_filter(client, message: Message):
+    if not message.text or message.text.startswith('/'):
+        return
+    if not message.from_user:
+        return
 
-            while empty_batches < 3:
-                try:
-                    ids = list(range(msg_id, msg_id + batch_size))
-                    messages = await client.get_messages(channel, ids)
+    await add_user(message.from_user.id, message.from_user.first_name)
 
-                    has_content = False
-                    for msg in messages:
-                        if not msg or not msg.id:
-                            continue
-                        has_content = True
-                        try:
-                            file = None
-                            if msg.document:
-                                file = msg.document
-                            elif msg.video:
-                                file = msg.video
-                            elif msg.audio:
-                                file = msg.audio
+    chat_id  = message.chat.id
+    settings = await get_group_settings(chat_id)
 
-                            if not file:
-                                continue
-
-                            name = getattr(file, 'file_name', '') or ''
-                            ext  = name.rsplit('.', 1)[-1].lower() if '.' in name else ''
-
-                            if INDEX_EXTENSIONS and ext not in INDEX_EXTENSIONS:
-                                continue
-
-                            saved = save_file(
-                                file_id=file.file_id,
-                                file_name=name or f"file_{file.file_unique_id}",
-                                file_size=file.file_size or 0,
-                                file_type=ext,
-                                caption=msg.caption or ''
-                            )
-                            if saved:
-                                total_saved += 1
-                            else:
-                                total_skip += 1
-
-                        except Exception as e:
-                            total_err += 1
-                            logger.warning(f"File error: {e}")
-
-                    if not has_content:
-                        empty_batches += 1
-                    else:
-                        empty_batches = 0
-
-                    msg_id += batch_size
-
-                    if msg_id % 1000 == 1:
-                        await status.edit_text(
-                            f"📂 Indexing: **{chat.title}**\n"
-                            f"✅ Saved: `{total_saved}`\n"
-                            f"⏭ Skipped: `{total_skip}`\n"
-                            f"🔄 Scanning message #{msg_id}..."
-                        )
-
-                except Exception as e:
-                    logger.warning(f"Batch error at {msg_id}: {e}")
-                    msg_id += batch_size
-                    continue
-
-        except Exception as e:
-            logger.error(f"Channel error {channel}: {e}")
-            await status.edit_text(f"❌ Error accessing channel `{channel}`:\n`{e}`")
+    # Force subscribe check
+    if settings.get('force_sub') and settings.get('auth_channel'):
+        if not await is_subscribed(client, message.from_user.id, settings['auth_channel']):
+            try:
+                inv = await client.export_chat_invite_link(settings['auth_channel'])
+                btn = [[InlineKeyboardButton("📢 Join Channel", url=inv)]]
+                k = await message.reply_text(
+                    f"⚠️ {message.from_user.mention}, join our channel first!",
+                    reply_markup=InlineKeyboardMarkup(btn)
+                )
+                await asyncio.sleep(30)
+                await k.delete()
+            except Exception as e:
+                logger.warning(f"Force sub error: {e}")
             return
 
-    total = count_files()
-    await status.edit_text(
-        f"✅ **Indexing Complete!**\n\n"
-        f"➕ New files saved: `{total_saved}`\n"
-        f"⏭ Duplicates skipped: `{total_skip}`\n"
-        f"❌ Errors: `{total_err}`\n"
-        f"📁 Total files in DB: `{total}`"
+    query = clean_query(message.text)
+    if len(query) < 2:
+        return
+
+    s = await message.reply(f"🔍 Searching for `{query}`...")
+
+    files, total = search_files(query, max_results=MAX_BTN)
+
+    if not files:
+        if settings.get('spell_check', True):
+            await show_spell_suggestions(client, message, s, query)
+        else:
+            await s.edit_text(f"❌ No results found for **{query}**")
+        return
+
+    await show_results(client, message, s, query, files, total, settings)
+
+
+async def show_results(client, message, s, query, files, total, settings):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    key     = f"{chat_id}_{message.id}"
+    SEARCH_CACHE[key] = {'query': query, 'offset': 0}
+
+    me = await client.get_me()
+    use_shortlink = (
+        settings.get('shortlink') and
+        settings.get('shortlink_url') and
+        settings.get('shortlink_api')
     )
 
+    # Build file buttons — with shortlink if enabled
+    btn = []
+    for file in files:
+        file_url = f"https://t.me/{me.username}?start=file_{chat_id}_{str(file['_id'])}"
 
-@Client.on_message(filters.command("delete_all") & filters.user(ADMINS))
-async def delete_all(client, message: Message):
-    await message.reply_text(
-        "⚠️ Are you sure you want to delete ALL indexed files?\n\n"
-        "Reply with /confirm_delete to proceed."
-    )
+        if use_shortlink:
+            # Wrap each file link with shortlink
+            short_url = await get_shortlink(
+                settings['shortlink_url'],
+                settings['shortlink_api'],
+                file_url
+            )
+            btn.append([
+                InlineKeyboardButton(
+                    text=f"📁 {file['file_name'][:45]} [{get_size(file['file_size'])}]",
+                    url=short_url
+                )
+            ])
+        else:
+            # Direct callback — sends file to PM
+            btn.append([
+                InlineKeyboardButton(
+                    text=f"📁 {file['file_name'][:45]} [{get_size(file['file_size'])}]",
+                    callback_data=f"file_{chat_id}_{str(file['_id'])}"
+                )
+            ])
 
+    # Pagination
+    if total > MAX_BTN:
+        btn.append([
+            InlineKeyboardButton(f"1/{-((-total) // MAX_BTN)}", callback_data="pages"),
+            InlineKeyboardButton("Next »", callback_data=f"next_{key}_0_{user_id}")
+        ])
 
-@Client.on_message(filters.command("confirm_delete") & filters.user(ADMINS))
-async def confirm_delete(client, message: Message):
-    status = await message.reply_text("🗑 Deleting all files...")
-    deleted = delete_all_files()
-    await status.edit_text(f"✅ Deleted `{deleted}` files from database.")
+    # Send All button
+    if use_shortlink:
+        send_all_url = await get_shortlink(
+            settings['shortlink_url'],
+            settings['shortlink_api'],
+            f"https://t.me/{me.username}?start=all_{chat_id}_{key}"
+        )
+        btn.insert(0, [InlineKeyboardButton("📦 Send All Files ♻️", url=send_all_url)])
+    else:
+        btn.insert(0, [InlineKeyboardButton("📦 Send All Files", callback_data=f"sendall_{key}_{user_id}")])
 
+    # IMDB info
+    caption = f"🎬 Found **{total}** results for `{query}`\n\n"
+    photo   = None
 
-@Client.on_message(filters.command("files") & filters.user(ADMINS))
-async def file_count(client, message: Message):
-    total = count_files()
-    await message.reply_text(f"📁 Total indexed files: `{total}`")
+    if settings.get('imdb', True):
+        imdb = await get_imdb_info(query)
+        if imdb:
+            caption = (
+                f"🎬 **{imdb['title']}** ({imdb['year']})\n"
+                f"⭐ Rating: {imdb['rating']}/10\n"
+                f"🎭 Genre: {imdb['genres']}\n"
+                f"🌐 Language: {imdb['languages']}\n"
+                f"👥 Cast: {imdb['cast']}\n\n"
+                f"📖 {imdb['plot'][:200]}...\n\n"
+                f"Found **{total}** file(s) 👇"
+            )
+            photo = imdb.get('poster')
 
+    del_notice = ''
+    if settings.get('auto_delete') and DELETE_TIME > 0:
+        del_notice = f"\n\n⚠️ This message auto-deletes in {DELETE_TIME // 60} minutes"
 
-@Client.on_message(filters.command("index_channels") & filters.user(ADMINS))
-async def show_index_channels(client, message: Message):
-    if not INDEX_CHANNELS:
-        return await message.reply_text("❌ No INDEX_CHANNELS configured!")
-    text = "📋 **Indexed Channels:**\n\n"
-    for ch in INDEX_CHANNELS:
+    await s.delete()
+
+    try:
+        if photo:
+            k = await message.reply_photo(
+                photo=photo,
+                caption=caption[:1024] + del_notice,
+                reply_markup=InlineKeyboardMarkup(btn)
+            )
+        else:
+            k = await message.reply_text(
+                caption + del_notice,
+                reply_markup=InlineKeyboardMarkup(btn)
+            )
+    except Exception:
+        k = await message.reply_text(
+            caption + del_notice,
+            reply_markup=InlineKeyboardMarkup(btn)
+        )
+
+    if settings.get('auto_delete') and DELETE_TIME > 0:
+        await asyncio.sleep(DELETE_TIME)
         try:
-            chat = await client.get_chat(ch)
-            text += f"• {chat.title} (`{ch}`)\n"
+            await k.delete()
+            await message.delete()
         except Exception:
-            text += f"• `{ch}` (can't fetch name)\n"
-    await message.reply_text(text)
+            pass
+
+
+async def show_spell_suggestions(client, message, s, query):
+    movies = await get_spell_suggestions(query)
+    if not movies:
+        await s.edit_text(
+            f"❌ No results found for **{query}**\n\n"
+            "💡 Try different spelling or keywords!"
+        )
+        return
+
+    btn = []
+    for movie in movies[:5]:
+        title = movie.get('title', '')
+        year  = movie.get('year', '')
+        label = f"{title} ({year})" if year else title
+        btn.append([InlineKeyboardButton(label, callback_data=f"spell_{movie.movieID}")])
+
+    btn.append([InlineKeyboardButton("❌ Close", callback_data="close")])
+
+    await s.edit_text(
+        f"❓ Did you mean one of these for **{query}**?",
+        reply_markup=InlineKeyboardMarkup(btn)
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^file_"))
+async def file_callback(client, query):
+    """Handle file button click — redirect user to PM."""
+    _, chat_id, file_id = query.data.split("_", 2)
+    me = await client.get_me()
+    await query.answer(
+        url=f"https://t.me/{me.username}?start=file_{chat_id}_{file_id}"
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^sendall_"))
+async def send_all_callback(client, query):
+    parts   = query.data.split("_")
+    key     = f"{parts[1]}_{parts[2]}"
+    user_id = int(parts[3])
+
+    if query.from_user.id != user_id:
+        return await query.answer("This is not for you!", show_alert=True)
+
+    cache = SEARCH_CACHE.get(key)
+    if not cache:
+        return await query.answer("Session expired. Search again.", show_alert=True)
+
+    me = await client.get_me()
+    await query.answer(
+        url=f"https://t.me/{me.username}?start=all_{key}"
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^spell_"))
+async def spell_callback(client, query):
+    movie_id = query.data.split("_")[1]
+    from imdb import Cinemagoer
+    ia = Cinemagoer()
+    try:
+        movie  = ia.get_movie(movie_id)
+        search = movie.get('title', '')
+        s = await query.message.edit_text(f"🔍 Searching for `{search}`...")
+        files, total = search_files(search, max_results=MAX_BTN)
+        if not files:
+            await s.edit_text(f"❌ No results for **{search}**")
+            return
+        settings = await get_group_settings(query.message.chat.id)
+        await show_results(client, query, s, search, files, total, settings)
+    except Exception as e:
+        logger.error(f"Spell callback error: {e}")
+        await query.answer("Error! Try again.", show_alert=True)
+
+
+@Client.on_callback_query(filters.regex(r"^close$"))
+async def close_callback(client, query):
+    await query.message.delete()
+
+
+@Client.on_callback_query(filters.regex(r"^pages$"))
+async def pages_callback(client, query):
+    await query.answer("Page info", show_alert=False)
