@@ -8,11 +8,13 @@ logger = logging.getLogger(__name__)
 
 
 async def is_admin(client, chat_id, user_id):
+    if user_id in ADMINS:
+        return True
     try:
         member = await client.get_chat_member(chat_id, user_id)
         return member.status.value in ('administrator', 'creator')
     except Exception:
-        return user_id in ADMINS
+        return False
 
 
 async def build_settings_buttons(chat_id):
