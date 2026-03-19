@@ -3,17 +3,13 @@ class script:
     START_TXT = """
 👋 Hello {mention}!
 
-I'm an **Auto Filter Bot** 🎬
+I'm an **IM A MOVIE BOT ** 🎬
+𝐌𝐀𝐈𝐍 𝐂𝐇𝐀𝐍𝐍𝐄𝐋🔻
+https://t.me/infinity_padangal
 
-Add me to your group and I'll help users find movies instantly!
-
-🔍 Users just type any movie name — I'll show file buttons with sizes.
-📥 Click a button → file arrives in their PM!
-
-📌 **Quick Setup:**
-1. Add me to your group as admin
-2. Use /index to index your movie channel  
-3. Done! Users can start searching 🚀
+𝐀𝐒𝐊 𝐔𝐑 𝐌𝐎𝐕𝐈𝐄𝐒 𝐇𝐄𝐑𝐄🔻
+https://t.me/+F8m_NK216hU3NzU1
+any problem msg me @Infinity_vibe
 """
 
     HELP_TXT = """
@@ -53,7 +49,17 @@ Add me to your group and I'll help users find movies instantly!
 • e.g. "RRR" instead of "RRR 2022 Tamil"
 """
 
-    FILE_CAPTION = "📁 **{file_name}**\n💾 Size: {file_size}"
+    FILE_CAPTION = "📁 **{file_name}**\n💾 Size: {file_size}
+    ╭─── • ❰ KEEP SUPPORT ❱ • ────➤
+𝐌𝐀𝐈𝐍 𝐂𝐇𝐀𝐍𝐍𝐄𝐋🔻
+https://t.me/infinity_padangal
+
+𝐀𝐒𝐊 𝐔𝐑 𝐌𝐎𝐕𝐈𝐄𝐒 𝐇𝐄𝐑𝐄🔻
+https://t.me/+uqYYOOtw6L0xMDI1
+
+𝐈𝐍𝐒𝐓𝐀 🔻
+ https://www.instagram.com/invites/contact/?i=yjti421dvitr&utm_content=gzimgf6
+╰─────── • ◆ • ───────➤"
 
     IMDB_TEMPLATE = """🎬 **{title}** ({year})
 ⭐ Rating: {rating}/10
