@@ -1,14 +1,15 @@
 class script:
-
     START_TXT = """
 👋 Hello {mention}!
 
-I'm an **IM A MOVIE BOT ** 🎬
+I'm an **IM A MOVIE BOT** 🎬
+
 𝐌𝐀𝐈𝐍 𝐂𝐇𝐀𝐍𝐍𝐄𝐋🔻
 https://t.me/infinity_padangal
 
 𝐀𝐒𝐊 𝐔𝐑 𝐌𝐎𝐕𝐈𝐄𝐒 𝐇𝐄𝐑𝐄🔻
 https://t.me/+F8m_NK216hU3NzU1
+
 any problem msg me @Infinity_vibe
 """
 
@@ -49,17 +50,17 @@ any problem msg me @Infinity_vibe
 • e.g. "RRR" instead of "RRR 2022 Tamil"
 """
 
-    FILE_CAPTION = "📁 **{file_name}**\n💾 Size: {file_size}
-    ╭─── • ❰ KEEP SUPPORT ❱ • ────➤
+    FILE_CAPTION = """📁 **{file_name}**
+💾 Size: {file_size}
+
+╭─── • ❰ KEEP SUPPORT ❱ • ────➤
 𝐌𝐀𝐈𝐍 𝐂𝐇𝐀𝐍𝐍𝐄𝐋🔻
 https://t.me/infinity_padangal
-
 𝐀𝐒𝐊 𝐔𝐑 𝐌𝐎𝐕𝐈𝐄𝐒 𝐇𝐄𝐑𝐄🔻
 https://t.me/+uqYYOOtw6L0xMDI1
-
 𝐈𝐍𝐒𝐓𝐀 🔻
- https://www.instagram.com/invites/contact/?i=yjti421dvitr&utm_content=gzimgf6
-╰─────── • ◆ • ───────➤"
+https://www.instagram.com/invites/contact/?i=yjti421dvitr&utm_content=gzimgf6
+╰─────── • ◆ • ───────➤"""
 
     IMDB_TEMPLATE = """🎬 **{title}** ({year})
 ⭐ Rating: {rating}/10
