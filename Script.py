@@ -51,7 +51,7 @@ any problem msg me @Infinity_vibe
 """
 
     FILE_CAPTION = """📁 **{file_name}**
-💾 Size: {file_size}
+💾 **Size:** {file_size}
 
 ╭─── • ❰ KEEP SUPPORT ❱ • ────➤
 𝐌𝐀𝐈𝐍 𝐂𝐇𝐀𝐍𝐍𝐄𝐋🔻
