@@ -3,7 +3,7 @@ import random
 import asyncio
 from hydrogram import Client, filters
 from hydrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
-from info import ADMINS, PICS, SUPPORT_LINK, UPDATES_LINK, AUTH_CHANNEL, DELETE_TIME, INDEX_CHANNELS
+from info import ADMINS, PICS, SUPPORT_LINK, UPDATES_LINK, AUTH_CHANNEL, DELETE_TIME
 from database import add_user, add_group, count_files, total_users, total_groups, get_group_settings
 from utils import get_size, is_subscribed
 from Script import script
@@ -49,7 +49,7 @@ async def start(client, message: Message):
 
 
 async def send_file_to_user(client, message, chat_id, file_id):
-    """Send file to user PM with fully custom caption."""
+    """Send file WITHOUT any caption, then send our custom caption below it."""
     from database.db import files_col
     from bson import ObjectId
 
@@ -76,36 +76,48 @@ async def send_file_to_user(client, message, chat_id, file_id):
                 except Exception as e:
                     logger.warning(f"Force sub error: {e}")
 
-        # Build our custom caption
+        # Build our caption
         caption = script.FILE_CAPTION.format(
             file_name=file['file_name'],
             file_size=get_size(file['file_size'])
         )
 
-        # Determine file type and send with custom caption directly
         ftype = file.get('file_type', '').lower()
         fid   = file['file_id']
-        sent  = None
 
-        if ftype in ['mp4', 'mkv', 'avi', 'mov', 'webm']:
-            sent = await client.send_video(
+        # Send file with NO caption (empty string removes original caption)
+        try:
+            if ftype in ['mp4', 'mkv', 'avi', 'mov', 'webm', 'flv', 'wmv']:
+                sent = await client.send_video(
+                    chat_id=message.chat.id,
+                    video=fid,
+                    caption=""
+                )
+            elif ftype in ['mp3', 'flac', 'wav', 'm4a', 'ogg']:
+                sent = await client.send_audio(
+                    chat_id=message.chat.id,
+                    audio=fid,
+                    caption=""
+                )
+            else:
+                sent = await client.send_document(
+                    chat_id=message.chat.id,
+                    document=fid,
+                    caption=""
+                )
+        except Exception:
+            # Fallback to send_cached_media with empty caption
+            sent = await client.send_cached_media(
                 chat_id=message.chat.id,
-                video=fid,
-                caption=caption
+                file_id=fid,
+                caption=""
             )
-        elif ftype in ['mp3', 'flac', 'wav', 'm4a']:
-            sent = await client.send_audio(
-                chat_id=message.chat.id,
-                audio=fid,
-                caption=caption
-            )
-        else:
-            # Default: send as document
-            sent = await client.send_document(
-                chat_id=message.chat.id,
-                document=fid,
-                caption=caption
-            )
+
+        # Now send OUR caption as a separate message below the file
+        cap_msg = await client.send_message(
+            chat_id=message.chat.id,
+            text=caption
+        )
 
         # Auto delete
         if settings.get('auto_delete') and DELETE_TIME > 0:
@@ -115,6 +127,7 @@ async def send_file_to_user(client, message, chat_id, file_id):
             await asyncio.sleep(DELETE_TIME)
             try:
                 await sent.delete()
+                await cap_msg.delete()
             except Exception:
                 pass
 
