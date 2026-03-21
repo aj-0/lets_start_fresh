@@ -49,7 +49,7 @@ async def start(client, message: Message):
 
 
 async def send_file_to_user(client, message, chat_id, file_id):
-    """Send file WITHOUT any caption, then send our custom caption below it."""
+    """Copy file from source channel with our custom caption — ignores original caption."""
     from database.db import files_col
     from bson import ObjectId
 
@@ -76,48 +76,42 @@ async def send_file_to_user(client, message, chat_id, file_id):
                 except Exception as e:
                     logger.warning(f"Force sub error: {e}")
 
-        # Build our caption
+        # Our custom caption — completely replaces original
         caption = script.FILE_CAPTION.format(
             file_name=file['file_name'],
             file_size=get_size(file['file_size'])
         )
 
-        ftype = file.get('file_type', '').lower()
-        fid   = file['file_id']
+        sent = None
 
-        # Send file with NO caption (empty string removes original caption)
-        try:
-            if ftype in ['mp4', 'mkv', 'avi', 'mov', 'webm', 'flv', 'wmv']:
-                sent = await client.send_video(
-                    chat_id=message.chat.id,
-                    video=fid,
-                    caption=""
-                )
-            elif ftype in ['mp3', 'flac', 'wav', 'm4a', 'ogg']:
-                sent = await client.send_audio(
-                    chat_id=message.chat.id,
-                    audio=fid,
-                    caption=""
-                )
-            else:
-                sent = await client.send_document(
-                    chat_id=message.chat.id,
-                    document=fid,
-                    caption=""
-                )
-        except Exception:
-            # Fallback to send_cached_media with empty caption
-            sent = await client.send_cached_media(
-                chat_id=message.chat.id,
-                file_id=fid,
-                caption=""
-            )
+        # Method 1: Use copy_message with our caption (best method)
+        src_chat = file.get('chat_id')
+        src_msg  = file.get('msg_id')
 
-        # Now send OUR caption as a separate message below the file
-        cap_msg = await client.send_message(
-            chat_id=message.chat.id,
-            text=caption
-        )
+        if src_chat and src_msg:
+            try:
+                sent = await client.copy_message(
+                    chat_id=message.chat.id,
+                    from_chat_id=src_chat,
+                    message_id=src_msg,
+                    caption=caption   # ← This FULLY replaces original caption
+                )
+            except Exception as e:
+                logger.warning(f"copy_message failed: {e}")
+
+        # Method 2: Fallback — send_cached_media then edit caption
+        if not sent:
+            try:
+                sent = await client.send_cached_media(
+                    chat_id=message.chat.id,
+                    file_id=file['file_id'],
+                    caption=caption
+                )
+            except Exception as e:
+                logger.warning(f"send_cached_media failed: {e}")
+
+        if not sent:
+            return await message.reply_text("❌ Could not send file. Please try again.")
 
         # Auto delete
         if settings.get('auto_delete') and DELETE_TIME > 0:
@@ -127,7 +121,6 @@ async def send_file_to_user(client, message, chat_id, file_id):
             await asyncio.sleep(DELETE_TIME)
             try:
                 await sent.delete()
-                await cap_msg.delete()
             except Exception:
                 pass
 
@@ -165,9 +158,9 @@ async def help_callback(client, query):
 
 @Client.on_callback_query(filters.regex(r"^checksub_"))
 async def checksub_callback(client, query):
-    parts   = query.data.split("_", 2)
-    chat_id = parts[1]
-    file_id = parts[2]
+    parts    = query.data.split("_", 2)
+    chat_id  = parts[1]
+    file_id  = parts[2]
     settings = await get_group_settings(int(chat_id))
 
     if settings.get('force_sub') and settings.get('auth_channel'):
