@@ -5,35 +5,9 @@ from hydrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from info import ADMINS, PICS, SUPPORT_LINK, UPDATES_LINK, AUTH_CHANNEL
 from database import add_user, add_group, count_files, total_users, total_groups, get_group_settings
 from utils import get_size, is_subscribed
+from Script import script
 
 logger = logging.getLogger(__name__)
-
-START_TEXT = """
-👋 Hello {mention}!
-
-I'm a **MOVIE BOT ** 
-join our channel first 
-any problem msg me : @Infinity_vibe
-
-"""
-
-HELP_TEXT = """
-📖 **Bot Commands**
-
-**User Commands:**
-• Just type a movie name in the group!
-• /start — Start the bot
-• /help — Show this message
-
-**Admin Commands:**
-• /index — Index files from your channel
-• /delete_all — Delete all indexed files
-• /stats — Bot statistics
-• /settings — Group settings
-• /broadcast — Send message to all users
-• /ban [user_id] — Ban a user
-• /unban [user_id] — Unban a user
-"""
 
 @Client.on_message(filters.command("start") & filters.private)
 async def start(client, message: Message):
@@ -63,12 +37,12 @@ async def start(client, message: Message):
     if pic:
         await message.reply_photo(
             photo=pic,
-            caption=START_TEXT.format(mention=message.from_user.mention),
+            caption=script.START_TXT.format(mention=message.from_user.mention),
             reply_markup=reply_markup
         )
     else:
         await message.reply_text(
-            START_TEXT.format(mention=message.from_user.mention),
+            script.START_TXT.format(mention=message.from_user.mention),
             reply_markup=reply_markup
         )
 
@@ -103,7 +77,7 @@ async def send_file_to_user(client, message, chat_id, file_id):
         sent = await client.send_cached_media(
             chat_id=message.chat.id,
             file_id=file['file_id'],
-            caption=f"📁 **{file['file_name']}**\n💾 Size: {get_size(file['file_size'])}"
+            caption=script.FILE_CAPTION.format(file_name=file['file_name'], file_size=get_size(file['file_size']))
         )
 
         if settings.get('auto_delete') and DELETE_TIME > 0:
