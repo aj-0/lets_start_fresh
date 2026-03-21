@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 async def start(client, message: Message):
     await add_user(message.from_user.id, message.from_user.first_name)
 
-    # Handle file request from group
     if len(message.command) > 1:
         data = message.command[1]
         if data.startswith("file_"):
@@ -49,7 +48,7 @@ async def start(client, message: Message):
 
 
 async def send_file_to_user(client, message, chat_id, file_id):
-    """Send a file from database to user's PM with caption."""
+    """Send file to user PM with custom caption."""
     from database.db import files_col
     from bson import ObjectId
     import asyncio
@@ -64,7 +63,6 @@ async def send_file_to_user(client, message, chat_id, file_id):
         if settings.get('force_sub') and settings.get('auth_channel'):
             if not await is_subscribed(client, message.from_user.id, settings['auth_channel']):
                 try:
-                    chat = await client.get_chat(settings['auth_channel'])
                     inv = await client.export_chat_invite_link(settings['auth_channel'])
                     btn = [[
                         InlineKeyboardButton("📢 Join Channel", url=inv)
@@ -78,31 +76,32 @@ async def send_file_to_user(client, message, chat_id, file_id):
                 except Exception as e:
                     logger.warning(f"Force sub error: {e}")
 
-        # Build caption
+        # Build our custom caption
         caption = script.FILE_CAPTION.format(
             file_name=file['file_name'],
             file_size=get_size(file['file_size'])
         )
 
-        # Send file with caption
+        # Step 1: Send the file
+        sent = await client.send_cached_media(
+            chat_id=message.chat.id,
+            file_id=file['file_id'],
+            caption=caption
+        )
+
+        # Step 2: Edit caption to make sure our caption is applied
+        # (overrides any original caption from the source channel)
         try:
-            sent = await client.send_cached_media(
+            await client.edit_message_caption(
                 chat_id=message.chat.id,
-                file_id=file['file_id'],
+                message_id=sent.id,
                 caption=caption
             )
         except Exception:
-            # Fallback: copy message with new caption
-            sent = await client.copy_message(
-                chat_id=message.chat.id,
-                from_chat_id=message.chat.id,
-                message_id=message.id,
-                caption=caption
-            )
+            pass  # Caption already correct or not editable
 
         # Auto delete
         if settings.get('auto_delete') and DELETE_TIME > 0:
-            import asyncio
             await message.reply_text(
                 f"⚠️ This file will be deleted in {DELETE_TIME // 60} minutes!"
             )
@@ -146,8 +145,9 @@ async def help_callback(client, query):
 
 @Client.on_callback_query(filters.regex(r"^checksub_"))
 async def checksub_callback(client, query):
-    """Re-check subscription and send file."""
-    _, chat_id, file_id = query.data.split("_", 2)
+    parts = query.data.split("_", 2)
+    chat_id = parts[1]
+    file_id = parts[2]
     settings = await get_group_settings(int(chat_id))
 
     if settings.get('force_sub') and settings.get('auth_channel'):
@@ -155,7 +155,6 @@ async def checksub_callback(client, query):
             return await query.answer("❌ You haven't joined yet!", show_alert=True)
 
     await query.message.delete()
-    # Create a fake message object to reuse send_file_to_user
     await send_file_to_user(client, query.message, chat_id, file_id)
 
 
