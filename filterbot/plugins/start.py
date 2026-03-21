@@ -2,12 +2,13 @@ import logging
 import random
 from hydrogram import Client, filters
 from hydrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
-from info import ADMINS, PICS, SUPPORT_LINK, UPDATES_LINK, AUTH_CHANNEL
+from info import ADMINS, PICS, SUPPORT_LINK, UPDATES_LINK, AUTH_CHANNEL, DELETE_TIME
 from database import add_user, add_group, count_files, total_users, total_groups, get_group_settings
 from utils import get_size, is_subscribed
 from Script import script
 
 logger = logging.getLogger(__name__)
+
 
 @Client.on_message(filters.command("start") & filters.private)
 async def start(client, message: Message):
@@ -48,10 +49,9 @@ async def start(client, message: Message):
 
 
 async def send_file_to_user(client, message, chat_id, file_id):
-    """Send a file from database to user's PM."""
+    """Send a file from database to user's PM with caption."""
     from database.db import files_col
     from bson import ObjectId
-    from info import DELETE_TIME
     import asyncio
 
     try:
@@ -63,24 +63,46 @@ async def send_file_to_user(client, message, chat_id, file_id):
         settings = await get_group_settings(int(chat_id))
         if settings.get('force_sub') and settings.get('auth_channel'):
             if not await is_subscribed(client, message.from_user.id, settings['auth_channel']):
-                btn = [[InlineKeyboardButton(
-                    "📢 Join Channel",
-                    url=f"https://t.me/{(await client.get_chat(settings['auth_channel'])).username}"
-                )],[
-                    InlineKeyboardButton("✅ I Joined", callback_data=f"checksub_{chat_id}_{file_id}")
-                ]]
-                return await message.reply_text(
-                    "⚠️ You must join our channel to get files!",
-                    reply_markup=InlineKeyboardMarkup(btn)
-                )
+                try:
+                    chat = await client.get_chat(settings['auth_channel'])
+                    inv = await client.export_chat_invite_link(settings['auth_channel'])
+                    btn = [[
+                        InlineKeyboardButton("📢 Join Channel", url=inv)
+                    ],[
+                        InlineKeyboardButton("✅ I Joined", callback_data=f"checksub_{chat_id}_{file_id}")
+                    ]]
+                    return await message.reply_text(
+                        "⚠️ You must join our channel to get files!",
+                        reply_markup=InlineKeyboardMarkup(btn)
+                    )
+                except Exception as e:
+                    logger.warning(f"Force sub error: {e}")
 
-        sent = await client.send_cached_media(
-            chat_id=message.chat.id,
-            file_id=file['file_id'],
-            caption=script.FILE_CAPTION.format(file_name=file['file_name'], file_size=get_size(file['file_size']))
+        # Build caption
+        caption = script.FILE_CAPTION.format(
+            file_name=file['file_name'],
+            file_size=get_size(file['file_size'])
         )
 
+        # Send file with caption
+        try:
+            sent = await client.send_cached_media(
+                chat_id=message.chat.id,
+                file_id=file['file_id'],
+                caption=caption
+            )
+        except Exception:
+            # Fallback: copy message with new caption
+            sent = await client.copy_message(
+                chat_id=message.chat.id,
+                from_chat_id=message.chat.id,
+                message_id=message.id,
+                caption=caption
+            )
+
+        # Auto delete
         if settings.get('auto_delete') and DELETE_TIME > 0:
+            import asyncio
             await message.reply_text(
                 f"⚠️ This file will be deleted in {DELETE_TIME // 60} minutes!"
             )
@@ -97,7 +119,9 @@ async def send_file_to_user(client, message, chat_id, file_id):
 
 @Client.on_message(filters.command("help"))
 async def help_cmd(client, message: Message):
-    await message.reply_text(HELP_TEXT)
+    await message.reply_text(
+        script.HELP_TXT.format(mention=message.from_user.mention)
+    )
 
 
 @Client.on_message(filters.command("stats") & filters.user(ADMINS))
@@ -115,7 +139,24 @@ async def stats(client, message: Message):
 
 @Client.on_callback_query(filters.regex("^help$"))
 async def help_callback(client, query):
-    await query.message.edit_text(HELP_TEXT)
+    await query.message.edit_text(
+        script.HELP_TXT.format(mention=query.from_user.mention)
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^checksub_"))
+async def checksub_callback(client, query):
+    """Re-check subscription and send file."""
+    _, chat_id, file_id = query.data.split("_", 2)
+    settings = await get_group_settings(int(chat_id))
+
+    if settings.get('force_sub') and settings.get('auth_channel'):
+        if not await is_subscribed(client, query.from_user.id, settings['auth_channel']):
+            return await query.answer("❌ You haven't joined yet!", show_alert=True)
+
+    await query.message.delete()
+    # Create a fake message object to reuse send_file_to_user
+    await send_file_to_user(client, query.message, chat_id, file_id)
 
 
 @Client.on_message(filters.new_chat_members)
