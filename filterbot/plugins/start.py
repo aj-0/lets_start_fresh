@@ -1,8 +1,9 @@
 import logging
 import random
+import asyncio
 from hydrogram import Client, filters
 from hydrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
-from info import ADMINS, PICS, SUPPORT_LINK, UPDATES_LINK, AUTH_CHANNEL, DELETE_TIME
+from info import ADMINS, PICS, SUPPORT_LINK, UPDATES_LINK, AUTH_CHANNEL, DELETE_TIME, INDEX_CHANNELS
 from database import add_user, add_group, count_files, total_users, total_groups, get_group_settings
 from utils import get_size, is_subscribed
 from Script import script
@@ -48,10 +49,9 @@ async def start(client, message: Message):
 
 
 async def send_file_to_user(client, message, chat_id, file_id):
-    """Send file to user PM with custom caption."""
+    """Send file to user PM with fully custom caption."""
     from database.db import files_col
     from bson import ObjectId
-    import asyncio
 
     try:
         file = files_col.find_one({'_id': ObjectId(file_id)})
@@ -82,23 +82,30 @@ async def send_file_to_user(client, message, chat_id, file_id):
             file_size=get_size(file['file_size'])
         )
 
-        # Step 1: Send the file
-        sent = await client.send_cached_media(
-            chat_id=message.chat.id,
-            file_id=file['file_id'],
-            caption=caption
-        )
+        # Determine file type and send with custom caption directly
+        ftype = file.get('file_type', '').lower()
+        fid   = file['file_id']
+        sent  = None
 
-        # Step 2: Edit caption to make sure our caption is applied
-        # (overrides any original caption from the source channel)
-        try:
-            await client.edit_message_caption(
+        if ftype in ['mp4', 'mkv', 'avi', 'mov', 'webm']:
+            sent = await client.send_video(
                 chat_id=message.chat.id,
-                message_id=sent.id,
+                video=fid,
                 caption=caption
             )
-        except Exception:
-            pass  # Caption already correct or not editable
+        elif ftype in ['mp3', 'flac', 'wav', 'm4a']:
+            sent = await client.send_audio(
+                chat_id=message.chat.id,
+                audio=fid,
+                caption=caption
+            )
+        else:
+            # Default: send as document
+            sent = await client.send_document(
+                chat_id=message.chat.id,
+                document=fid,
+                caption=caption
+            )
 
         # Auto delete
         if settings.get('auto_delete') and DELETE_TIME > 0:
@@ -145,7 +152,7 @@ async def help_callback(client, query):
 
 @Client.on_callback_query(filters.regex(r"^checksub_"))
 async def checksub_callback(client, query):
-    parts = query.data.split("_", 2)
+    parts   = query.data.split("_", 2)
     chat_id = parts[1]
     file_id = parts[2]
     settings = await get_group_settings(int(chat_id))
