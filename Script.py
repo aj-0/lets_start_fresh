@@ -52,15 +52,15 @@ any problem msg me @Infinity_vibe
 
     FILE_CAPTION = """📁 **{file_name}**
 💾 **Size:** {file_size}
-
 ╭─── • ❰ KEEP SUPPORT ❱ • ────➤
 𝐌𝐀𝐈𝐍 𝐂𝐇𝐀𝐍𝐍𝐄𝐋🔻
-https://t.me/infinity_padangal
+https://t.me/infinity_padangal2
 𝐀𝐒𝐊 𝐔𝐑 𝐌𝐎𝐕𝐈𝐄𝐒 𝐇𝐄𝐑𝐄🔻
-https://t.me/+uqYYOOtw6L0xMDI1
+https://t.me/+F8m_NK216hU3NzU1
 𝐈𝐍𝐒𝐓𝐀 🔻
 https://www.instagram.com/invites/contact/?i=yjti421dvitr&utm_content=gzimgf6
-╰─────── • ◆ • ───────➤"""
+╰─────── • ◆ • ───────➤
+"""
 
     IMDB_TEMPLATE = """🎬 **{title}** ({year})
 ⭐ Rating: {rating}/10
