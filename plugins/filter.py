@@ -3,13 +3,12 @@ import logging
 import re
 from hydrogram import Client, filters
 from hydrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
-from info import ADMINS, MAX_BTN, DELETE_TIME, SUPPORT_GROUP
+from info import ADMINS, MAX_BTN, DELETE_TIME
 from database import search_files, get_group_settings, add_user
 from utils import get_size, get_shortlink, get_imdb_info, get_spell_suggestions, is_subscribed
 
 logger = logging.getLogger(__name__)
 
-# In-memory store for search results
 SEARCH_CACHE = {}
 
 
@@ -22,7 +21,6 @@ def clean_query(text):
 
 @Client.on_message(filters.group & filters.text & filters.incoming)
 async def group_filter(client, message: Message):
-    """Main auto filter handler for groups."""
     if not message.text or message.text.startswith('/'):
         return
     if not message.from_user:
@@ -37,11 +35,10 @@ async def group_filter(client, message: Message):
     if settings.get('force_sub') and settings.get('auth_channel'):
         if not await is_subscribed(client, message.from_user.id, settings['auth_channel']):
             try:
-                channel = await client.get_chat(settings['auth_channel'])
                 inv = await client.export_chat_invite_link(settings['auth_channel'])
                 btn = [[InlineKeyboardButton("📢 Join Channel", url=inv)]]
                 k = await message.reply_text(
-                    f"⚠️ {message.from_user.mention}, join our channel first to use this bot!",
+                    f"⚠️ {message.from_user.mention}, join our channel first!",
                     reply_markup=InlineKeyboardMarkup(btn)
                 )
                 await asyncio.sleep(30)
@@ -50,61 +47,102 @@ async def group_filter(client, message: Message):
                 logger.warning(f"Force sub error: {e}")
             return
 
-    query   = clean_query(message.text)
+    query = clean_query(message.text)
     if len(query) < 2:
         return
 
-    # Show searching message
     s = await message.reply(f"🔍 Searching for `{query}`...")
-
     files, total = search_files(query, max_results=MAX_BTN)
 
     if not files:
-        # Spell check
         if settings.get('spell_check', True):
             await show_spell_suggestions(client, message, s, query)
         else:
-            await s.edit_text(f"❌ No results found for **{query}**")
+            await s.edit_text(
+                f"❌ **{query}** not available!\n\n"
+                f"Contact admin to request this file."
+            )
         return
 
-    # Build result
     await show_results(client, message, s, query, files, total, settings)
 
 
-async def show_results(client, message, s, query, files, total, settings):
+async def show_results(client, message, s, query, files, total, settings, offset=0):
     """Show search results with file buttons."""
     chat_id = message.chat.id
-    user_id = message.from_user.id
+    user_id = message.from_user.id if message.from_user else 0
     key     = f"{chat_id}_{message.id}"
-    SEARCH_CACHE[key] = {'query': query, 'offset': 0}
+
+    SEARCH_CACHE[key] = {
+        'query':   query,
+        'offset':  offset,
+        'total':   total,
+        'user_id': user_id,
+    }
+
+    me = await client.get_me()
+    use_shortlink = (
+        settings.get('shortlink') and
+        settings.get('shortlink_url') and
+        settings.get('shortlink_api')
+    )
 
     # Build file buttons
     btn = []
     for file in files:
-        btn.append([
-            InlineKeyboardButton(
-                text=f"📁 {file['file_name'][:50]} [{get_size(file['file_size'])}]",
-                callback_data=f"file_{chat_id}_{str(file['_id'])}"
+        file_url = f"https://t.me/{me.username}?start=file_{chat_id}_{str(file['_id'])}"
+        if use_shortlink:
+            short_url = await get_shortlink(
+                settings['shortlink_url'],
+                settings['shortlink_api'],
+                file_url
             )
-        ])
+            btn.append([InlineKeyboardButton(
+                text=f"📁 {file['file_name'][:45]} [{get_size(file['file_size'])}]",
+                url=short_url
+            )])
+        else:
+            btn.append([InlineKeyboardButton(
+                text=f"📁 {file['file_name'][:45]} [{get_size(file['file_size'])}]",
+                callback_data=f"file_{chat_id}_{str(file['_id'])}"
+            )])
 
-    # Pagination
-    if total > MAX_BTN:
-        btn.append([
-            InlineKeyboardButton(f"1/{-((-total) // MAX_BTN)}", callback_data="pages"),
-            InlineKeyboardButton("Next »", callback_data=f"next_{key}_0_{user_id}")
-        ])
+    # Pagination buttons
+    total_pages = -(-total // MAX_BTN)  # ceiling division
+    current_page = (offset // MAX_BTN) + 1
+    nav_buttons = []
 
-    # Send All button (shortlink or direct)
-    if settings.get('shortlink') and settings.get('shortlink_url') and settings.get('shortlink_api'):
+    if offset > 0:
+        nav_buttons.append(InlineKeyboardButton(
+            "« Prev", callback_data=f"page_{key}_{offset - MAX_BTN}_{user_id}"
+        ))
+
+    nav_buttons.append(InlineKeyboardButton(
+        f"{current_page}/{total_pages}", callback_data="pages"
+    ))
+
+    if offset + MAX_BTN < total:
+        nav_buttons.append(InlineKeyboardButton(
+            "Next »", callback_data=f"page_{key}_{offset + MAX_BTN}_{user_id}"
+        ))
+
+    if nav_buttons:
+        btn.append(nav_buttons)
+
+    # Send All button
+    send_all_url = f"https://t.me/{me.username}?start=all_{chat_id}_{key}"
+    if use_shortlink:
         send_all_url = await get_shortlink(
             settings['shortlink_url'],
             settings['shortlink_api'],
-            f"https://t.me/{(await client.get_me()).username}?start=all_{chat_id}_{key}"
+            send_all_url
         )
         btn.insert(0, [InlineKeyboardButton("📦 Send All Files ♻️", url=send_all_url)])
     else:
-        btn.insert(0, [InlineKeyboardButton("📦 Send All Files", callback_data=f"sendall_{key}_{user_id}")])
+        btn.insert(0, [InlineKeyboardButton(
+            "📦 Send All Files",
+            callback_data=f"sendall_{key}_{user_id}"
+        )])
 
     # IMDB info
     caption = f"🎬 Found **{total}** results for `{query}`\n\n"
@@ -117,17 +155,14 @@ async def show_results(client, message, s, query, files, total, settings):
                 f"🎬 **{imdb['title']}** ({imdb['year']})\n"
                 f"⭐ Rating: {imdb['rating']}/10\n"
                 f"🎭 Genre: {imdb['genres']}\n"
-                f"🌐 Language: {imdb['languages']}\n"
-                f"👥 Cast: {imdb['cast']}\n\n"
-                f"📖 {imdb['plot'][:200]}...\n\n"
+                f"🌐 Language: {imdb['languages']}\n\n"
                 f"Found **{total}** file(s) 👇"
             )
             photo = imdb.get('poster')
 
-    # Auto delete notice
     del_notice = ''
     if settings.get('auto_delete') and DELETE_TIME > 0:
-        del_notice = f"\n\n⚠️ Files auto-delete in {DELETE_TIME // 60} minutes"
+        del_notice = f"\n\n⚠️ Auto-deletes in {DELETE_TIME // 60} minutes"
 
     await s.delete()
 
@@ -149,7 +184,6 @@ async def show_results(client, message, s, query, files, total, settings):
             reply_markup=InlineKeyboardMarkup(btn)
         )
 
-    # Auto delete
     if settings.get('auto_delete') and DELETE_TIME > 0:
         await asyncio.sleep(DELETE_TIME)
         try:
@@ -160,12 +194,11 @@ async def show_results(client, message, s, query, files, total, settings):
 
 
 async def show_spell_suggestions(client, message, s, query):
-    """Show IMDB spell check suggestions."""
     movies = await get_spell_suggestions(query)
     if not movies:
         await s.edit_text(
-            f"❌ No results found for **{query}**\n\n"
-            "💡 Try different spelling or keywords!"
+            f"❌ **{query}** not available!\n\n"
+            f"📞 Contact admin to request this file."
         )
         return
 
@@ -179,14 +212,13 @@ async def show_spell_suggestions(client, message, s, query):
     btn.append([InlineKeyboardButton("❌ Close", callback_data="close")])
 
     await s.edit_text(
-        f"❓ Did you mean one of these for **{query}**?",
+        f"❓ **{query}** not found!\nDid you mean:",
         reply_markup=InlineKeyboardMarkup(btn)
     )
 
 
 @Client.on_callback_query(filters.regex(r"^file_"))
 async def file_callback(client, query):
-    """Handle file button click — redirect user to PM."""
     _, chat_id, file_id = query.data.split("_", 2)
     me = await client.get_me()
     await query.answer(
@@ -194,21 +226,116 @@ async def file_callback(client, query):
     )
 
 
+@Client.on_callback_query(filters.regex(r"^page_"))
+async def page_callback(client, query):
+    """Handle pagination."""
+    parts    = query.data.split("_")
+    # format: page_{chat_id}_{msg_id}_{offset}_{user_id}
+    chat_id  = parts[1]
+    msg_id   = parts[2]
+    offset   = int(parts[3])
+    user_id  = int(parts[4])
+
+    if query.from_user.id != user_id:
+        return await query.answer("This is not for you!", show_alert=True)
+
+    key   = f"{chat_id}_{msg_id}"
+    cache = SEARCH_CACHE.get(key)
+    if not cache:
+        return await query.answer("Session expired! Search again.", show_alert=True)
+
+    search_query = cache['query']
+    files, total = search_files(search_query, max_results=MAX_BTN, offset=offset)
+
+    if not files:
+        return await query.answer("No more files!", show_alert=True)
+
+    settings = await get_group_settings(int(chat_id))
+    me       = await client.get_me()
+    use_shortlink = (
+        settings.get('shortlink') and
+        settings.get('shortlink_url') and
+        settings.get('shortlink_api')
+    )
+
+    # Rebuild buttons
+    btn = []
+    for file in files:
+        file_url = f"https://t.me/{me.username}?start=file_{chat_id}_{str(file['_id'])}"
+        if use_shortlink:
+            short_url = await get_shortlink(
+                settings['shortlink_url'],
+                settings['shortlink_api'],
+                file_url
+            )
+            btn.append([InlineKeyboardButton(
+                text=f"📁 {file['file_name'][:45]} [{get_size(file['file_size'])}]",
+                url=short_url
+            )])
+        else:
+            btn.append([InlineKeyboardButton(
+                text=f"📁 {file['file_name'][:45]} [{get_size(file['file_size'])}]",
+                callback_data=f"file_{chat_id}_{str(file['_id'])}"
+            )])
+
+    # Pagination
+    total_pages  = -(-total // MAX_BTN)
+    current_page = (offset // MAX_BTN) + 1
+    nav_buttons  = []
+
+    if offset > 0:
+        nav_buttons.append(InlineKeyboardButton(
+            "« Prev", callback_data=f"page_{key}_{offset - MAX_BTN}_{user_id}"
+        ))
+    nav_buttons.append(InlineKeyboardButton(
+        f"{current_page}/{total_pages}", callback_data="pages"
+    ))
+    if offset + MAX_BTN < total:
+        nav_buttons.append(InlineKeyboardButton(
+            "Next »", callback_data=f"page_{key}_{offset + MAX_BTN}_{user_id}"
+        ))
+
+    if nav_buttons:
+        btn.append(nav_buttons)
+
+    # Send All
+    send_all_url = f"https://t.me/{me.username}?start=all_{chat_id}_{key}"
+    if use_shortlink:
+        send_all_url = await get_shortlink(
+            settings['shortlink_url'],
+            settings['shortlink_api'],
+            send_all_url
+        )
+        btn.insert(0, [InlineKeyboardButton("📦 Send All Files ♻️", url=send_all_url)])
+    else:
+        btn.insert(0, [InlineKeyboardButton(
+            "📦 Send All Files",
+            callback_data=f"sendall_{key}_{user_id}"
+        )])
+
+    SEARCH_CACHE[key]['offset'] = offset
+
+    try:
+        await query.message.edit_reply_markup(InlineKeyboardMarkup(btn))
+    except Exception:
+        pass
+    await query.answer(f"Page {current_page}/{total_pages}")
+
+
 @Client.on_callback_query(filters.regex(r"^sendall_"))
 async def send_all_callback(client, query):
-    """Handle send all button."""
-    parts   = query.data.split("_")
-    key     = f"{parts[1]}_{parts[2]}"
-    user_id = int(parts[3])
+    """Send all files to user PM."""
+    parts    = query.data.split("_", 3)
+    key      = f"{parts[1]}_{parts[2]}"
+    user_id  = int(parts[3])
 
     if query.from_user.id != user_id:
         return await query.answer("This is not for you!", show_alert=True)
 
     cache = SEARCH_CACHE.get(key)
     if not cache:
-        return await query.answer("Session expired. Search again.", show_alert=True)
+        return await query.answer("Session expired! Search again.", show_alert=True)
 
-    files, total = search_files(cache['query'], max_results=50)
     me = await client.get_me()
     await query.answer(
         url=f"https://t.me/{me.username}?start=all_{key}"
@@ -217,20 +344,37 @@ async def send_all_callback(client, query):
 
 @Client.on_callback_query(filters.regex(r"^spell_"))
 async def spell_callback(client, query):
-    """Handle spell check movie selection."""
     movie_id = query.data.split("_")[1]
     from imdb import Cinemagoer
     ia = Cinemagoer()
     try:
         movie  = ia.get_movie(movie_id)
         search = movie.get('title', '')
-        s = await query.message.edit_text(f"🔍 Searching for `{search}`...")
+        s      = await query.message.edit_text(f"🔍 Searching for `{search}`...")
         files, total = search_files(search, max_results=MAX_BTN)
         if not files:
-            await s.edit_text(f"❌ No results for **{search}**")
+            await s.edit_text(
+                f"❌ **{search}** not available!\n\n"
+                f"📞 Contact admin to request."
+            )
             return
         settings = await get_group_settings(query.message.chat.id)
-        await show_results(client, query, s, search, files, total, settings)
+
+        # Create fake message object
+        class FakeMsg:
+            chat = query.message.chat
+            id   = query.message.id
+            from_user = query.from_user
+            async def reply(self, text):
+                return await query.message.reply(text)
+            async def reply_text(self, text, **kwargs):
+                return await query.message.reply_text(text, **kwargs)
+            async def reply_photo(self, **kwargs):
+                return await query.message.reply_photo(**kwargs)
+            async def delete(self):
+                pass
+
+        await show_results(client, FakeMsg(), s, search, files, total, settings)
     except Exception as e:
         logger.error(f"Spell callback error: {e}")
         await query.answer("Error! Try again.", show_alert=True)
