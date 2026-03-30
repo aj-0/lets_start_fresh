@@ -5,7 +5,7 @@ class script:
 I'm an **IM A MOVIE BOT** 🎬
 
 𝐌𝐀𝐈𝐍 𝐂𝐇𝐀𝐍𝐍𝐄𝐋🔻
-https://t.me/infinity_padangal
+https://t.me/infinity_padangal2
 
 𝐀𝐒𝐊 𝐔𝐑 𝐌𝐎𝐕𝐈𝐄𝐒 𝐇𝐄𝐑𝐄🔻
 https://t.me/+F8m_NK216hU3NzU1
