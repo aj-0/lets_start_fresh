@@ -1,4 +1,5 @@
 import logging
+import re
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import MongoClient
 from pymongo.errors import DuplicateKeyError
@@ -7,10 +8,9 @@ from info import DATABASE_URL, DATABASE_NAME
 logger = logging.getLogger(__name__)
 
 async_client = AsyncIOMotorClient(DATABASE_URL)
-async_db = async_client[DATABASE_NAME]
-
-sync_client = MongoClient(DATABASE_URL)
-sync_db = sync_client[DATABASE_NAME]
+async_db     = async_client[DATABASE_NAME]
+sync_client  = MongoClient(DATABASE_URL)
+sync_db      = sync_client[DATABASE_NAME]
 
 files_col    = sync_db['files']
 users_col    = async_db['users']
@@ -24,6 +24,43 @@ def ensure_indexes():
     logger.info("Database indexes ensured")
 
 
+def search_files(query, max_results=10, offset=0):
+    """
+    Accurate search — filters by ALL words in query using regex.
+    Falls back to text search if no regex results.
+    """
+    query = query.strip()
+    if not query:
+        return [], 0
+
+    # Build regex pattern — all words must appear in filename
+    words   = re.split(r'\s+', query.lower())
+    pattern = ''.join(f'(?=.*{re.escape(w)})' for w in words)
+
+    try:
+        # Primary: regex search (most accurate)
+        regex_filter = {'file_name': {'$regex': pattern, '$options': 'i'}}
+        total  = files_col.count_documents(regex_filter)
+        cursor = files_col.find(regex_filter).skip(offset).limit(max_results)
+        results = list(cursor)
+
+        if results:
+            return results, total
+
+        # Fallback: text search
+        text_filter = {'$text': {'$search': query}}
+        total   = files_col.count_documents(text_filter)
+        cursor  = files_col.find(
+            text_filter,
+            {'score': {'$meta': 'textScore'}}
+        ).sort([('score', {'$meta': 'textScore'})]).skip(offset).limit(max_results)
+        return list(cursor), total
+
+    except Exception as e:
+        logger.error(f"Search error: {e}")
+        return [], 0
+
+
 def save_file(file_id, file_name, file_size, file_type, caption='', chat_id=None, msg_id=None):
     try:
         files_col.insert_one({
@@ -32,30 +69,16 @@ def save_file(file_id, file_name, file_size, file_type, caption='', chat_id=None
             'file_size': file_size,
             'file_type': file_type,
             'caption':   caption,
-            'chat_id':   chat_id,   # source channel ID
-            'msg_id':    msg_id,    # source message ID
+            'chat_id':   chat_id,
+            'msg_id':    msg_id,
         })
         return True
     except DuplicateKeyError:
         return False
 
 
-def search_files(query, max_results=10, offset=0):
-    query = query.strip()
-    if not query:
-        return [], 0
-    cursor = files_col.find(
-        {'$text': {'$search': query}},
-        {'score': {'$meta': 'textScore'}}
-    ).sort([('score', {'$meta': 'textScore'})]).skip(offset).limit(max_results)
-    results = list(cursor)
-    total   = files_col.count_documents({'$text': {'$search': query}})
-    return results, total
-
-
 def delete_all_files():
-    result = files_col.delete_many({})
-    return result.deleted_count
+    return files_col.delete_many({}).deleted_count
 
 
 def count_files():
