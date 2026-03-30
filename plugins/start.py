@@ -77,10 +77,7 @@ async def send_file_to_user(client, message, chat_id, file_id):
                     logger.warning(f"Force sub error: {e}")
 
         # Our custom caption — completely replaces original
-        caption = script.FILE_CAPTION.format(
-            file_name=file['file_name'],
-            file_size=get_size(file['file_size'])
-        )
+        caption = script.FILE_CAPTION(file['file_name'], get_size(file['file_size']))
 
         sent = None
 
@@ -182,3 +179,61 @@ async def new_group(client, message: Message):
                 f"📌 Make me an admin and use /index to index your movie channel.\n"
                 f"Then users can search movies by typing their names!"
             )
+
+
+# Handle send all files
+@Client.on_message(filters.command("start") & filters.private)
+async def handle_all_files(client, message: Message):
+    if len(message.command) > 1:
+        data = message.command[1]
+        if data.startswith("all_"):
+            parts = data.split("_", 2)
+            if len(parts) == 3:
+                _, chat_id, key = parts
+                await send_all_files(client, message, chat_id, key)
+
+
+async def send_all_files(client, message, chat_id, key):
+    from database.db import files_col, search_files
+    from filter import SEARCH_CACHE
+
+    cache = SEARCH_CACHE.get(key)
+    if not cache:
+        return await message.reply_text("❌ Session expired! Search again in group.")
+
+    files, total = search_files(cache['query'], max_results=50)
+    if not files:
+        return await message.reply_text("❌ No files found!")
+
+    await message.reply_text(f"📦 Sending {total} files...")
+
+    for file in files:
+        try:
+            from Script import script
+            from utils import get_size
+            from bson import ObjectId
+
+            caption = script.FILE_CAPTION.format(
+                file_name=file['file_name'],
+                file_size=get_size(file['file_size'])
+            )
+
+            src_chat = file.get('chat_id')
+            src_msg  = file.get('msg_id')
+
+            if src_chat and src_msg:
+                await client.copy_message(
+                    chat_id=message.chat.id,
+                    from_chat_id=src_chat,
+                    message_id=src_msg,
+                    caption=caption
+                )
+            else:
+                await client.send_cached_media(
+                    chat_id=message.chat.id,
+                    file_id=file['file_id'],
+                    caption=caption
+                )
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.warning(f"Send all error: {e}")
